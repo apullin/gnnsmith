@@ -26,4 +26,3 @@ gnnsmith fuzz-ops --seeds 2
 gnnsmith fuzz-dag --num-dags 300
 ```
 
-See [`findings/BUGS.md`](findings/BUGS.md) and [`repros/`](repros/) for discovered bugs and standalone minimal reproducers.
