@@ -9,3 +9,6 @@ build/
 artifacts/
 *.jsonl
 .DS_Store
+
+findings/
+repros/
