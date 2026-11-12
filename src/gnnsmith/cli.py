@@ -27,6 +27,9 @@ def main() -> None:
     p_dag.add_argument("--no-mps", action="store_true")
     p_dag.add_argument("--out", type=Path, default=Path("artifacts/fuzz_dag.jsonl"))
 
+    p_deep = sub.add_parser("fuzz-deep", help="Run deep PyTorch 2 compile/AMP/gradcheck/transforms/models/explain/serialization batteries")
+    p_deep.add_argument("--out", type=Path, default=Path("artifacts/fuzz_deep.jsonl"))
+
     args = parser.parse_args()
 
     if args.cmd == "whitefox":
@@ -56,6 +59,16 @@ def main() -> None:
         )
         for i, f in enumerate(runner.unique_findings.values(), 1):
             print(f"  [{i:02d}] ({f.oracle} / {f.category}) {'->'.join(f.op_types)} [{f.topology_kind}]: {f.summary}")
+
+    elif args.cmd == "fuzz-deep":
+        from gnnsmith.deep_fuzz import run_all_deep_batteries
+
+        runner = CampaignRunner(out_jsonl=args.out)
+        hits = run_all_deep_batteries()
+        runner.record(hits)
+        print(f"\nDeep Fuzz finished: {len(runner.unique_findings)} unique findings (raw={runner.total_raw_hits}).")
+        for i, f in enumerate(runner.unique_findings.values(), 1):
+            print(f"  [{i:02d}] ({f.oracle} / {f.category}) {f.op_types[0]}: {f.summary}")
 
 
 if __name__ == "__main__":
