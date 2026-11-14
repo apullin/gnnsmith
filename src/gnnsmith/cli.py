@@ -30,6 +30,12 @@ def main() -> None:
     p_deep = sub.add_parser("fuzz-deep", help="Run deep PyTorch 2 compile/AMP/gradcheck/transforms/models/explain/serialization batteries")
     p_deep.add_argument("--out", type=Path, default=Path("artifacts/fuzz_deep.jsonl"))
 
+    p_w5 = sub.add_parser("fuzz-wave5", help="Run bipartite, flow-duality, hetero-Z3, sparse-layout, 3D force-field, modern models, & MLX differential batteries under sys.monitoring coverage")
+    p_w5.add_argument("--out", type=Path, default=Path("artifacts/fuzz_wave5.jsonl"))
+
+    p_w7 = sub.add_parser("fuzz-wave7", help="Run Dense GNNs vs Sparse parity, masked-padding leakage, Dense Pooling, KGE, Encoding, & Attention batteries")
+    p_w7.add_argument("--out", type=Path, default=Path("artifacts/fuzz_wave7.jsonl"))
+
     args = parser.parse_args()
 
     if args.cmd == "whitefox":
@@ -67,6 +73,35 @@ def main() -> None:
         hits = run_all_deep_batteries()
         runner.record(hits)
         print(f"\nDeep Fuzz finished: {len(runner.unique_findings)} unique findings (raw={runner.total_raw_hits}).")
+        for i, f in enumerate(runner.unique_findings.values(), 1):
+            print(f"  [{i:02d}] ({f.oracle} / {f.category}) {f.op_types[0]}: {f.summary}")
+
+    elif args.cmd == "fuzz-wave5":
+        import torch_geometric.edge_index as ei_mod
+        import torch_geometric.nn.conv.message_passing as mp_mod
+        from gnnsmith.accessory_fuzz import run_all_wave5_campaigns
+        from gnnsmith.coverage_loop import PyGCoverageMonitor
+
+        runner = CampaignRunner(out_jsonl=args.out)
+        with PyGCoverageMonitor() as mon:
+            hits = run_all_wave5_campaigns()
+        runner.record(hits)
+        cov = mon.find_uncovered_branches([ei_mod, mp_mod])
+        print(
+            f"\n[Coverage] Executed {cov.lines_executed:,} lines across {cov.files_executed} PyG files | "
+            f"Uncovered AST branches in (edge_index, message_passing): {len(cov.uncovered_branches)}/{cov.total_ast_branches_scanned}"
+        )
+        print(f"Wave 5 finished: {len(runner.unique_findings)} unique findings (raw={runner.total_raw_hits}).")
+        for i, f in enumerate(runner.unique_findings.values(), 1):
+            print(f"  [{i:02d}] ({f.oracle} / {f.category}) {f.op_types[0]}: {f.summary}")
+
+    elif args.cmd == "fuzz-wave7":
+        from gnnsmith.dense_and_kge_fuzz import run_all_wave7_campaigns
+
+        runner = CampaignRunner(out_jsonl=args.out)
+        hits = run_all_wave7_campaigns()
+        runner.record(hits)
+        print(f"\nWave 7 finished: {len(runner.unique_findings)} unique findings (raw={runner.total_raw_hits}).")
         for i, f in enumerate(runner.unique_findings.values(), 1):
             print(f"  [{i:02d}] ({f.oracle} / {f.category}) {f.op_types[0]}: {f.summary}")
 
