@@ -1,8 +1,8 @@
-# PyTorch Geometric (`2.8.1` / `2.9.0-dev`) Master Bug Ledger — Epochs 1–4 (`GNNSmith` + `WhiteFox`)
+# PyTorch Geometric (`2.8.1` / `2.9.0-dev`) Master Bug Ledger — Waves 1–8 (`GNNSmith` + `WhiteFox`)
 
 **Target Environment:** `torch-geometric` (`upstream/master` `2.9.0`), `torch==2.15.0`, Python `3.13.14`, Apple M2 Ultra (`arm64` CPU + Metal `MPS`)  
-**Fix Branch:** [`apullin/pytorch_geometric` → `mega-bugfix`](https://github.com/apullin/pytorch_geometric/tree/mega-bugfix) (6 stacked subsystem commits)  
-**Local Verification:** `uv run python repros_pyg.py` (**`35/35`** bug reproducers confirmed on `upstream/master`; **`0/35`** remaining on `mega-bugfix`).
+**Fix Branch:** [`apullin/pytorch_geometric` → `mega-bugfix`](https://github.com/apullin/pytorch_geometric/tree/mega-bugfix) (8 stacked subsystem commits)  
+**Local Verification:** `uv run python repros_pyg.py` (**`47/47`** bug reproducer checks across **44 distinct PyG bugs**; **`0/47`** remaining on `mega-bugfix`).
 
 ---
 
@@ -42,6 +42,19 @@
 | **BUG-030** | `nn.models.GraphUNet` | **High** | Crash (`RuntimeError`) on Apple Silicon / Windows | `GraphUNet` (`SparseCsr @ SparseCsr` without `NO_MKL` fallback) | Deep Fuzz D5 (Models) |
 | **BUG-031** | `data` Serialization (PT 2.6+) | **High** | `UnpicklingError` on Default `torch.load(weights_only=True)` | `torch.save` + `torch.load` on `Data`, `Batch`, `HeteroData`, `TemporalData` | Deep Fuzz D7 (Serialization) |
 | **BUG-032** | `Index`/`EdgeIndex` + TorchDynamo | **High** | `InternalTorchDynamoError` (`AttributeError: _data`) | `Index.__new__` / `EdgeIndex.__new__` when Dynamo traces subclass init directly | Epoch 2 `pytest` + PT2 Compile |
+| **BUG-033** | `utils.spmm` & `ARMAConv` | **High** | Crash (`RuntimeError`) on 3D Feature Tensors | `spmm` & `ARMAConv` (`[K, N, F]`) on `torch.sparse` COO/CSR/CSC (`mat2 must be a matrix, got 3-D tensor`) | Wave 5 L1 (Sparse Layouts) |
+| **BUG-034** | `GeneralConv` Bipartite | **Medium** | Crash (`TypeError`) on `(x_src, None)` | `GeneralConv` (`OptPairTensor` signature crashes calling `lin_self(None)`) | Wave 5 B1 (Bipartite Z3) |
+| **BUG-035** | `ClusterGCNConv` Flow | **High** | Silent Wrong Math (`max_diff = 1.76`) | `ClusterGCNConv(flow='target_to_source')` hardcodes `col = edge_index[1]` | Wave 5 B2 (`flow` Duality) |
+| **BUG-036** | `ChebConv` Flow | **High** | Silent Wrong Math (`max_diff = 1.04`) | `ChebConv(flow='target_to_source')` calls `get_laplacian` along unflipped `edge_index[0]` | Wave 5 B2 (`flow` Duality) |
+| **BUG-037** | `GATConv` & `GATv2Conv` Flow | **High** | Silent Wrong Math (`max_diff = 2.79`) | `GATConv` / `GATv2Conv` (`flow='target_to_source'`) aggregates self-loop `edge_attr` onto source axis | Wave 5 B2 (`flow` Duality) |
+| **BUG-038** | `MessagePassing` Core / Jinja | **Critical** | Jinja vs Python `_collect` Mismatch + Lost `size` | `edge_updater` hardcodes `size=None`; `_collect` swaps `(src, dst)` tuples under `target_to_source` vs `collect.jinja`, and `collect.jinja` passes hardcoded `0`/`1` to `_set_size` | Wave 5 B2 + WhiteFox |
+| **BUG-039** | `nn.models.TGNMemory` | **High** | Crash (`ValueError`) on `.eval()` / Empty Batch | `TGNMemory.eval()` before updates or `update_state` with 0 events crashes unpacking `zip(*[])` | Wave 5 A2 (Temporal Models) |
+| **BUG-040** | `utils.loop` + `torch.export` | **Medium** | `GuardOnDataDependentSymNode` Export Failure | `MixHopConv` / weighted `add_remaining_self_loops` branching on unbacked masked self-loop count | Wave 5 `torch.export` Sweep |
+| **BUG-041** | `DenseGATConv` | **High** | Silent `NaN` Forward & Backward | `DenseGATConv(add_loop=False)` runs `softmax([-inf, ..., -inf]) -> NaN` on isolated/edgeless nodes | Wave 7 W7.1 (Dense Convs) |
+| **BUG-042** | `dense_mincut_pool` & `DMoNPooling` | **High** | Silent `NaN` Regularization Loss (`0 / 0`) | `dense_mincut_pool` & `DMoNPooling` divide `0 / 0` whenever a graph in a batch has `0` edges | Wave 7 W7.2 (Dense Pooling) |
+| **BUG-043** | Graph Transformer Attention | **Critical** | Silent Padding Token Leakage Across Batched Graphs | `PerformerAttention`, `SGFormerAttention`, and `PolynormerAttention` mask `v` but forget to mask `k` (and `SGFormer` uses padded `N` instead of valid node count), corrupting variable-size batches (`max_diff = 0.12–0.39`) | Wave 7 W7.3 (Masked Padding Oracle) |
+| **BUG-044** | `nn.kge` (`TransE`/`ComplEx`/`DistMult`/`RotatE`) | **Medium** | Silent `NaN` Loss on Empty Triplet Batches | All 4 KGE models return `NaN` from `.loss()` when `head_index` has `0` triplets | Wave 7 W7.3 (KGE) |
+| *(MLX-001)* | `mlx-graphs` (`GCNConv`) | **Medium** | Crash (`AssertionError`) on Empty Edges | `mlx_graphs.nn.GCNConv` asserts `edge_index[1].size > 0`, crashing on `E == 0` | Wave 5 A3 (PyG-vs-MLX Oracle) |
 
 ---
 
@@ -190,4 +203,50 @@
 4. `ee590437` — Fix crashes and `NaN`s on empty inputs across 8 `Aggregation` modules (`BUG-017`, `BUG-018`)
 5. `d9911ced` — Fix self-loop multigraph race, `fp16`/arbitrary-dim `softmax`, `homophily`, `assortativity`, `HeteroLayerNorm`, `to_hetero` source-only nodes, and Python 3.13+ `inspector.py` (`BUG-013`, `BUG-015`, `BUG-016`, `BUG-019`..`BUG-022`)
 6. `c24032ba` — Fix AMP/low-prec convs (`MFConv`, `ClusterGCNConv` MPS `SIGABRT`), `float64`/weighted SpMM, geometric/`GDC` transforms, `GraphUNet` non-MKL, and `weights_only=True` serialization (`BUG-023`..`BUG-031`)
+7. `e7bca7f3` — Enable 3D `ptr` assertion in `test_attentional_aggregation` on PyTorch >= 2.0 (`BUG-016`)
+8. `238be457` — Fix 3D `spmm` (`ARMAConv`), bipartite `GeneralConv`, `flow='target_to_source'` duality (`ClusterGCNConv`, `ChebConv`, `GATConv`, `GATv2Conv`, `MessagePassing._collect`/`collect.jinja`), `TGNMemory` empty batch/eval, `torch.export` branchless self-loops, `DenseGATConv`/`mincut_pool`/`DMoNPooling` edgeless `NaN`s, linear attention (`Performer`/`SGFormer`/`Polynormer`) padding leakage, and empty KGE loss (`BUG-033`..`BUG-044`)
+
+---
+
+## Waves 5–8 Additions (Bipartite, Flow Duality, Sparse Layouts, `torch.export`, Dense GNNs, & Graph Transformer Attention)
+
+### BUG-033: `utils.spmm` & `ARMAConv` Crash on 3D Feature Tensors (`[K, N, F]`)
+- **Location:** `torch_geometric/utils/_spmm.py` & `nn/conv/arma_conv.py`
+- **Mechanism:** `ARMAConv` stacks `num_stacks` into `[K, N, F]` and delegates `torch.sparse` COO/CSR inputs to `spmm(adj_t, x)`, which called 2D-only `torch.sparse.mm` directly (`RuntimeError: addmm: mat2 must be a matrix, got 3-D tensor`). PyG even had a `with pytest.raises(RuntimeError): # No 3D feature tensor support` workaround in `test_arma_conv.py`, now resolved and enabled.
+
+### BUG-034: `GeneralConv` Crashes on `(x_src, None)` Bipartite Inputs
+- **Location:** `torch_geometric/nn/conv/general_conv.py:158`
+- **Mechanism:** Annotated `x: Union[Tensor, OptPairTensor]`, but called `self.lin_self(x[1])` unconditionally when `x[1]` was `None`.
+
+### BUG-035, BUG-036, BUG-037: `ClusterGCNConv`, `ChebConv`, `GATConv`, and `GATv2Conv` Violate `flow='target_to_source'` Mathematical Duality
+- **Locations:** `cluster_gcn_conv.py:118`, `cheb_conv.py:118`, `gat_conv.py:345`, `gatv2_conv.py:310`
+- **Mechanism:** `conv(flow='source_to_target')(x, ei)` must identically equal `conv(flow='target_to_source')(x, ei.flip(0))`, yet `ClusterGCNConv` hardcoded `col = edge_index[1]` (`diff = 1.76`), `ChebConv` passed unflipped `edge_index` to `get_laplacian` (`diff = 1.04`), and `GATConv`/`GATv2Conv` computed self-loop `fill_value='mean'` edge attributes along `edge_index[1]` (`diff = 0.69–2.79`).
+
+### BUG-038: `MessagePassing._collect` vs `collect.jinja` Tuple Disagreement Under `target_to_source` + Ignored `size` in `edge_updater`
+- **Locations:** `torch_geometric/nn/conv/message_passing.py:358,665` & `collect.jinja:122,128`
+- **Mechanism:** Python `_collect` indexed 2-tuples `(x_0, x_1)` by `dim` (`swapping` source/target under `flow='target_to_source'`), whereas `collect.jinja` always treated `[0]` as `_j` and `[1]` as `_i` (while passing hardcoded `0`/`1` instead of `j`/`i` to `_set_size`), causing `decomposed_layers > 1` / `explain=True` to disagree with Jinja propagation! Meanwhile `edge_updater` hardcoded `self._check_input(edge_index, size=None)` instead of passing `size`.
+
+### BUG-039: `TGNMemory` Crashes on `.eval()` Before Updates or on Empty Event Batches
+- **Location:** `torch_geometric/nn/models/tgn.py:131,165,183`
+- **Mechanism:** Calling `tgn.eval()` flushes `msg_store` via `_update_memory`, and when `msg_store` or `n_id` is empty, `src, dst, t, raw_msg = list(zip(*data))` crashes with `ValueError: not enough values to unpack (expected 4, got 0)`.
+
+### BUG-040: Data-Dependent Self-Loop Count Guard Breaks `torch.export.export`
+- **Location:** `torch_geometric/utils/loop.py:644`
+- **Mechanism:** Replaced Python `if loop_nodes.numel() > 0:` branch on boolean-masked `loop_nodes` with branchless `scatter_` + `scatter` + `torch.where`, allowing strict `torch.export.export` on `MixHopConv` and weighted spectral layers.
+
+### BUG-041: `DenseGATConv(add_loop=False)` Emits `NaN` Forward & Backward on Isolated / Edgeless Nodes
+- **Location:** `torch_geometric/nn/dense/dense_gat_conv.py:94-97`
+- **Mechanism:** Filling an entire row of `alpha` with `-inf` when a node has `0` neighbors causes `.softmax(dim=2)` to evaluate `0 / 0 = NaN` (and `SoftmaxBackward0` propagates `0 * NaN = NaN` into gradients even if masked afterward).
+
+### BUG-042: `dense_mincut_pool` & `DMoNPooling` Emit `NaN` Loss on Edgeless Graphs (`adj == 0`)
+- **Locations:** `torch_geometric/nn/dense/mincut_pool.py:86` & `dmon_pool.py:136`
+- **Mechanism:** Zero total degree (`mincut_den == 0` / `2m == 0`) divides `0 / 0 = NaN` in `mincut_loss` and `spectral_loss`.
+
+### BUG-043: `PerformerAttention`, `SGFormerAttention`, and `PolynormerAttention` Leak Masked Padding Tokens Into Valid Node Embeddings
+- **Locations:** `nn/attention/performer.py:92,165`, `sgformer.py:65-88`, `polynormer.py:76-88`
+- **Mechanism:** All three linear-attention Graph Transformer modules zeroed `v` at `~mask` **but forgot to zero `k` after positive kernel/activation maps (`ReLU + eps`, `L2-norm`, `sigmoid(0) = 0.5`)**, injecting phantom key mass from padded positions into the attention denominator `q @ k.sum()` (and `SGFormerAttention` additionally added the padded batch width `N` instead of per-graph valid node counts `mask.sum(dim=1)`!). Corrupted variable-size batched inference/training across `GPSConv(attn_type='performer')`, `SGFormer`, and `PolynormerAttention`.
+
+### BUG-044: Knowledge Graph Embedding Models (`TransE`, `ComplEx`, `DistMult`, `RotatE`) Return `NaN` Loss on Empty Batches
+- **Locations:** `nn/kge/{transe,complex,distmult,rotate}.py`
+
 

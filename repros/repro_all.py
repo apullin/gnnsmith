@@ -472,6 +472,182 @@ def bug_032_dynamo_index_wrapper_usercode_crash() -> Tuple[bool, str]:
         return True, f"{type(e).__name__}: {e}"
 
 
+def bug_033_spmm_3d_armaconv_crash() -> Tuple[bool, str]:
+    """BUG-033: `spmm` and `ARMAConv` crash on 3D feature tensors `[K, N, F]` with `torch.sparse` COO/CSR."""
+    from torch_geometric.utils import to_torch_csc_tensor
+
+    conv = pyg_nn.ARMAConv(8, 8, num_stacks=2, num_layers=2).eval()
+    adj = to_torch_csc_tensor(torch.tensor([[0, 1, 2], [1, 2, 0]]), size=(4, 4)).t()
+    try:
+        conv(torch.randn(4, 8), adj)
+        return False, "Did not crash"
+    except RuntimeError as e:
+        return True, f"RuntimeError: {e}"
+
+
+def bug_034_general_conv_none_dst_crash() -> Tuple[bool, str]:
+    """BUG-034: `GeneralConv` crashes on `(x_src, None)` bipartite input despite `OptPairTensor` signature."""
+    conv = pyg_nn.GeneralConv((8, 12), 16).eval()
+    try:
+        conv((torch.randn(4, 8), None), torch.tensor([[0, 1], [1, 3]]), size=(4, 5))
+        return False, "Did not crash"
+    except TypeError as e:
+        return True, f"TypeError: {e}"
+
+
+def bug_035_clustergcn_flow_duality() -> Tuple[bool, str]:
+    """BUG-035: `ClusterGCNConv` ignores `self.flow`, violating `flow='target_to_source'` duality."""
+    torch.manual_seed(0)
+    c1 = pyg_nn.ClusterGCNConv(8, 8, diag_lambda=0.5, flow="source_to_target").eval()
+    c2 = pyg_nn.ClusterGCNConv(8, 8, diag_lambda=0.5, flow="target_to_source").eval()
+    c2.load_state_dict(c1.state_dict())
+    x = torch.randn(5, 8)
+    ei = torch.tensor([[0, 0, 1, 2], [1, 3, 2, 4]])
+    diff = float((c1(x, ei) - c2(x, ei.flip(0))).abs().max().item())
+    return diff > 1e-3, f"flow_duality_diff={diff:.4e}"
+
+
+def bug_036_chebconv_flow_duality() -> Tuple[bool, str]:
+    """BUG-036: `ChebConv` ignores `self.flow` in `get_laplacian`, violating `flow='target_to_source'` duality."""
+    torch.manual_seed(0)
+    c1 = pyg_nn.ChebConv(8, 8, K=2, flow="source_to_target").eval()
+    c2 = pyg_nn.ChebConv(8, 8, K=2, flow="target_to_source").eval()
+    c2.load_state_dict(c1.state_dict())
+    x = torch.randn(5, 8)
+    ei = torch.tensor([[0, 0, 1, 2], [1, 3, 2, 4]])
+    ew = torch.tensor([0.3, 1.2, 0.7, 2.0])
+    diff = float((c1(x, ei, ew) - c2(x, ei.flip(0), ew)).abs().max().item())
+    return diff > 1e-3, f"flow_duality_diff={diff:.4e}"
+
+
+def bug_037_gat_gatv2_flow_duality() -> Tuple[bool, str]:
+    """BUG-037: `GATConv` & `GATv2Conv` violate `flow='target_to_source'` duality on self-loop `edge_attr`."""
+    torch.manual_seed(0)
+    x = torch.randn(5, 8)
+    ei = torch.tensor([[0, 0, 1, 2], [1, 3, 2, 4]])
+    ea = torch.randn(4, 4)
+    g1 = pyg_nn.GATConv(8, 4, heads=2, edge_dim=4, flow="source_to_target").eval()
+    g2 = pyg_nn.GATConv(8, 4, heads=2, edge_dim=4, flow="target_to_source").eval()
+    g2.load_state_dict(g1.state_dict())
+    d_gat = float((g1(x, ei, ea) - g2(x, ei.flip(0), ea)).abs().max().item())
+
+    v1 = pyg_nn.GATv2Conv(8, 4, heads=2, edge_dim=4, flow="source_to_target").eval()
+    v2 = pyg_nn.GATv2Conv(8, 4, heads=2, edge_dim=4, flow="target_to_source").eval()
+    v2.load_state_dict(v1.state_dict())
+    d_gatv2 = float((v1(x, ei, ea) - v2(x, ei.flip(0), ea)).abs().max().item())
+    return (d_gat > 1e-3 or d_gatv2 > 1e-3), f"gat_diff={d_gat:.4e}, gatv2_diff={d_gatv2:.4e}"
+
+
+def bug_038_message_passing_collect_and_edge_updater_size() -> Tuple[bool, str]:
+    """BUG-038: `MessagePassing.edge_updater` hardcoded `size=None` and `_collect` disagreed with `collect.jinja` on tuple order under `target_to_source`."""
+    class CustomMP(pyg_nn.MessagePassing):
+        def __init__(self):
+            super().__init__(flow="target_to_source")
+
+        def forward(self, x, edge_index):
+            return self.propagate(edge_index, x=x)
+
+        def message(self, x_i, x_j):
+            return x_j - x_i
+
+    m = CustomMP().eval()
+    x_pair = (torch.randn(5, 4), torch.randn(5, 4))
+    ei = torch.tensor([[0, 1, 2], [1, 2, 0]])
+    y_jinja = m(x_pair, ei)
+    m.decomposed_layers = 2
+    y_py = m(x_pair, ei)
+    diff = float((y_jinja - y_py).abs().max().item())
+    return diff > 1e-5, f"jinja_vs_python_collect_diff={diff:.4e}"
+
+
+def bug_039_tgn_memory_empty_crash() -> Tuple[bool, str]:
+    """BUG-039: `TGNMemory` crashes on `.eval()` before updates or on empty `update_state` batch."""
+    import torch_geometric.nn.models as pyg_models
+
+    tgn = pyg_models.TGNMemory(
+        num_nodes=6, raw_msg_dim=4, memory_dim=8, time_dim=4,
+        message_module=pyg_nn.models.tgn.IdentityMessage(4, 8, 4),
+        aggregator_module=pyg_nn.models.tgn.LastAggregator(),
+    )
+    try:
+        tgn.eval()
+        e0 = torch.empty(0, dtype=torch.long)
+        tgn.update_state(e0, e0, e0, torch.empty((0, 4)))
+        return False, "Did not crash"
+    except ValueError as e:
+        return True, f"ValueError: {e}"
+
+
+def bug_040_torch_export_mixhop_self_loops() -> Tuple[bool, str]:
+    """BUG-040: `MixHopConv` / weighted `add_remaining_self_loops` fails `torch.export.export` with `GuardOnDataDependentSymNode`."""
+    m = pyg_nn.MixHopConv(8, 4, powers=[0, 1]).eval()
+    try:
+        torch.export.export(m, (torch.randn(6, 8), torch.tensor([[0, 1, 2], [1, 2, 0]]), torch.ones(3)))
+        return False, "Export succeeded"
+    except Exception as e:
+        return True, f"{type(e).__name__}: {str(e).splitlines()[0][:100]}"
+
+
+def bug_041_dense_gat_conv_edgeless_nan() -> Tuple[bool, str]:
+    """BUG-041: `DenseGATConv(add_loop=False)` emits `NaN` on isolated nodes / edgeless graphs (`softmax(-inf)`)."""
+    import torch_geometric.nn.dense as pyg_dense
+
+    conv = pyg_dense.DenseGATConv(8, 8, heads=2).eval()
+    x = torch.randn(2, 4, 8, requires_grad=True)
+    out = conv(x, torch.zeros(2, 4, 4), add_loop=False)
+    out.sum().backward()
+    bad = not (bool(torch.isfinite(out).all().item()) and bool(torch.isfinite(x.grad).all().item()))
+    return bad, f"out_finite={torch.isfinite(out).all().item()}, grad_finite={torch.isfinite(x.grad).all().item()}"
+
+
+def bug_042_mincut_and_dmon_edgeless_nan() -> Tuple[bool, str]:
+    """BUG-042: `dense_mincut_pool` & `DMoNPooling` emit `NaN` loss on edgeless graphs (`0 / 0`)."""
+    import torch_geometric.nn.dense as pyg_dense
+
+    _, _, mc, _ = pyg_dense.dense_mincut_pool(torch.randn(1, 3, 8), torch.zeros(1, 3, 3), torch.randn(1, 3, 2))
+    _, _, _, sp, _, _ = pyg_dense.DMoNPooling([8, 8], k=2).eval()(torch.randn(1, 3, 8), torch.zeros(1, 3, 3))
+    bad = not (bool(torch.isfinite(mc).item()) and bool(torch.isfinite(sp).item()))
+    return bad, f"mc_loss={mc.item()}, dmon_sp_loss={sp.item()}"
+
+
+def bug_043_linear_attention_padding_leakage() -> Tuple[bool, str]:
+    """BUG-043: `PerformerAttention`, `SGFormerAttention`, and `PolynormerAttention` leak masked padding tokens into valid outputs!"""
+    import torch_geometric.nn.attention as pyg_attn
+
+    x_clean = torch.randn(2, 5, 8)
+    mask = torch.tensor([[True, True, True, True, True], [True, True, False, False, False]])
+    x_dirty = x_clean.clone()
+    x_dirty[~mask] = 100.0
+    max_leak = 0.0
+    for attn in [
+        pyg_attn.PerformerAttention(8, heads=2, head_channels=4).eval(),
+        pyg_attn.SGFormerAttention(8, heads=2, head_channels=4).eval(),
+        pyg_attn.PolynormerAttention(8, heads=2, head_channels=4).eval(),
+    ]:
+        yc = attn(x_clean, mask=mask)
+        yd = attn(x_dirty, mask=mask)
+        max_leak = max(max_leak, float((yc[mask] - yd[mask]).abs().max().item()))
+    return max_leak > 1e-4, f"max_padding_leak={max_leak:.4e}"
+
+
+def bug_044_kge_empty_batch_nan_loss() -> Tuple[bool, str]:
+    """BUG-044: `TransE`, `ComplEx`, `DistMult`, and `RotatE` return `NaN` loss on empty triplet batches."""
+    import torch_geometric.nn.kge as pyg_kge
+
+    e0 = torch.empty(0, dtype=torch.long)
+    losses = [
+        m.loss(e0, e0, e0).item()
+        for m in (
+            pyg_kge.TransE(6, 2, 8),
+            pyg_kge.ComplEx(6, 2, 8),
+            pyg_kge.DistMult(6, 2, 8),
+            pyg_kge.RotatE(6, 2, 8, margin=1.0),
+        )
+    ]
+    bad = any(v != v for v in losses)
+    return bad, f"losses={losses}"
+
+
 ALL_REPROS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "BUG-001": bug_001_index_rhs_inplace,
     "BUG-002": bug_002_edge_index_rsub,
@@ -508,6 +684,18 @@ ALL_REPROS: Dict[str, Callable[[], Tuple[bool, str]]] = {
     "BUG-030": bug_030_graph_unet_no_mkl_crash,
     "BUG-031": bug_031_weights_only_load_crash,
     "BUG-032": bug_032_dynamo_index_wrapper_usercode_crash,
+    "BUG-033": bug_033_spmm_3d_armaconv_crash,
+    "BUG-034": bug_034_general_conv_none_dst_crash,
+    "BUG-035": bug_035_clustergcn_flow_duality,
+    "BUG-036": bug_036_chebconv_flow_duality,
+    "BUG-037": bug_037_gat_gatv2_flow_duality,
+    "BUG-038": bug_038_message_passing_collect_and_edge_updater_size,
+    "BUG-039": bug_039_tgn_memory_empty_crash,
+    "BUG-040": bug_040_torch_export_mixhop_self_loops,
+    "BUG-041": bug_041_dense_gat_conv_edgeless_nan,
+    "BUG-042": bug_042_mincut_and_dmon_edgeless_nan,
+    "BUG-043": bug_043_linear_attention_padding_leakage,
+    "BUG-044": bug_044_kge_empty_batch_nan_loss,
 }
 
 

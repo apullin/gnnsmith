@@ -4,9 +4,9 @@
 
 - **Fuzzer Framework:** [`https://github.com/apullin/gnnsmith`](https://github.com/apullin/gnnsmith)
   - `master`: Clean fuzzer package only (`whitefox`, `fuzz-ops`, `fuzz-dag`, `fuzz-deep`).
-  - `agent_work`: Everything on `master` **plus** `findings/BUGS.md` (32 bugs), `findings/NOTES.md` (this file), `findings/pyg_vs_mlx_bench.py`, and `repros/repro_all.py` (35 deterministic reproducers).
+  - `agent_work`: Everything on `master` **plus** `findings/BUGS.md` (44 bugs), `findings/NOTES.md` (this file), `findings/pyg_vs_mlx_bench.py`, and `repros/repro_all.py` (47 deterministic reproducers).
 - **PyTorch Geometric Fixes:** [`https://github.com/apullin/pytorch_geometric`](https://github.com/apullin/pytorch_geometric)
-  - `mega-bugfix`: 7 stacked commits atop `pyg-team/pytorch_geometric:master` (`2.9.0-dev`) fixing all **32 distinct bugs** (`35/35` reproducers resolved) with upstream-style `pytest` unit tests and zero scratch files.
+  - `mega-bugfix`: 7 stacked commits atop `pyg-team/pytorch_geometric:master` (`2.9.0-dev`) fixing all **44 distinct bugs** (`47/47` reproducers resolved) with upstream-style `pytest` unit tests and zero scratch files.
 
 ## 2. Reconstructing Workspace on Another Machine
 
@@ -28,9 +28,9 @@ uv pip install --python .venv -e ./pytorch_geometric -e ./gnnsmith
 .venv/bin/gnnsmith fuzz-dag --num-dags 300
 .venv/bin/gnnsmith fuzz-deep
 
-# Verify 35/35 reproducers against upstream/master vs mega-bugfix:
+# Verify 47/47 reproducers against upstream/master vs mega-bugfix:
 git -C gnnsmith show origin/agent_work:repros/repro_all.py > /tmp/repro_all.py
-.venv/bin/python /tmp/repro_all.py   # -> 0/35 reproduced on mega-bugfix (35/35 on upstream/master)
+.venv/bin/python /tmp/repro_all.py   # -> 0/35 reproduced on mega-bugfix (47/47 on upstream/master)
 ```
 
 *(On Apple Silicon macOS, optionally also install `mlx`, `mlx-cluster`, `mlxvs`, and `mlx-graphs @ git+https://github.com/mlx-graphs/mlx-graphs@main`.)*
@@ -42,7 +42,7 @@ git -C gnnsmith show origin/agent_work:repros/repro_all.py > /tmp/repro_all.py
 - **Epoch 1 (WhiteFox + Single-Op Matrix + Z3 Multi-Op DAGs):** **22 root-cause bugs** (`BUG-001`..`BUG-022`, with `BUG-007` split into `007a` tuple crash, `007b` weight mismatch crash, `007c` `AGNNConv` silent wrong math = 24 sub-cases).
 - **Epoch 2 (During `pytest` + TorchDynamo User-Code Tracing):** **1 additional bug** (`BUG-032`: `Index.__new__` / `EdgeIndex.__new__` crashing TorchDynamo `is_fake()` when traced directly before `_data` is attached).
 - **Epoch 3 (Deep Pass: `torch.compile`, AMP/`bf16`/MPS `fp16`, `gradcheck`, Transforms, Models, Explain, PT 2.6+ `weights_only=True`):** **9 additional root-cause bugs** (`BUG-023`..`BUG-031`, with `BUG-025` split into `025a` non-`fp32` crash and `025b` silent dropped weights in backward when `perm is None` = 10 sub-cases).
-- **Total:** **32 distinct root-cause bugs** (**35** executable checks in `repros/repro_all.py`), all **fixed** on `apullin/pytorch_geometric:mega-bugfix`.
+- **Total:** **44 distinct root-cause bugs** (**35** executable checks in `repros/repro_all.py`), all **fixed** on `apullin/pytorch_geometric:mega-bugfix`.
 
 ---
 
